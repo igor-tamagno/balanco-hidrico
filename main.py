@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import base64
 import os
 from pathlib import Path
 
@@ -741,16 +740,16 @@ def create_sample_sigis_data():
 
 # FUNÇÃO PRINCIPAL DE CARREGAMENTO DE DADOS
 @st.cache_data
-def load_data(uploaded_file, uploaded_sigis):
-    """Carrega dados do arquivo enviado ou cria dados de exemplo"""
+def load_data(uploaded_file):
+    """Carrega dados do arquivo enviado"""
     
     if uploaded_file is not None:
         try:
-            # Carregar arquivo principal
-            df = pd.read_excel(uploaded_file)
+            # Carregar planilha 1 (Balanço Hídrico)
+            df = pd.read_excel(uploaded_file, sheet_name=0)  # Primeira planilha
             
             if df.empty:
-                st.error("❌ O arquivo Excel está vazio!")
+                st.error("❌ A planilha de Balanço Hídrico (Planilha 1) está vazia!")
                 return None, None
             
             expected_columns = ['cod_regional', 'nome_regional', 'cod_municipio', 'nome_municipio', 'cod_localidade', 'nome_localidade', 'ano_mes', 'id', 'parent', 'nivel_info', 'nome_info', 'valor', 'valor_acum']
@@ -758,7 +757,7 @@ def load_data(uploaded_file, uploaded_sigis):
             if len(df.columns) >= len(expected_columns):
                 df.columns = expected_columns[:len(df.columns)]
             else:
-                st.error(f"❌ O arquivo deve ter pelo menos {len(expected_columns)} colunas.")
+                st.error(f"❌ A planilha de Balanço Hídrico deve ter pelo menos {len(expected_columns)} colunas.")
                 return None, None
             
             df['parent'] = df['parent'].fillna("").astype(str).replace('nan', '')
@@ -769,18 +768,21 @@ def load_data(uploaded_file, uploaded_sigis):
             required_cols = ['nome_info', 'valor', 'id', 'parent', 'nivel_info']
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
-                st.error(f"❌ Colunas obrigatórias faltando: {missing_cols}")
+                st.error(f"❌ Colunas obrigatórias faltando na planilha de Balanço Hídrico: {missing_cols}")
                 return None, None
             
-            # Carregar dados SIGIS se disponível
+            # Carregar planilha 2 (SIGIS)
             df_sigis = None
-            if uploaded_sigis is not None:
-                try:
-                    df_sigis = pd.read_excel(uploaded_sigis)
-                    if 'ano_mes' in df_sigis.columns:
-                        df_sigis['ano_mes_formatted'] = df_sigis['ano_mes'].apply(format_ano_mes)
-                except Exception as e:
-                    st.warning(f"⚠️ Erro ao carregar dados SIGIS: {e}")
+            try:
+                df_sigis = pd.read_excel(uploaded_file, sheet_name=1)  # Segunda planilha
+                if not df_sigis.empty and 'ano_mes' in df_sigis.columns:
+                    df_sigis['ano_mes_formatted'] = df_sigis['ano_mes'].apply(format_ano_mes)
+                else:
+                    st.warning("⚠️ A planilha SIGIS (Planilha 2) está vazia ou não possui a coluna 'ano_mes'.")
+                    df_sigis = None
+            except Exception as e:
+                st.warning(f"⚠️ Erro ao carregar planilha SIGIS (Planilha 2): {e}")
+                df_sigis = None
             
             return df, df_sigis
             
@@ -789,16 +791,8 @@ def load_data(uploaded_file, uploaded_sigis):
             return None, None
     
     else:
-        # Usar dados de exemplo
-        st.info("📋 **Usando dados de exemplo para demonstração**")
-        df = create_sample_data()
-        df_sigis = create_sample_sigis_data()
-        
-        # Aplicar formatação de data
-        df['ano_mes_formatted'] = df['ano_mes'].apply(format_ano_mes)
-        df_sigis['ano_mes_formatted'] = df_sigis['ano_mes'].apply(format_ano_mes)
-        
-        return df, df_sigis
+        # Sem arquivo carregado
+        return None, None
 
 # Restante das funções permanecem iguais...
 def apply_hierarchical_filters(df, regional_sel, municipio_sel, localidade_sel):
@@ -1114,33 +1108,56 @@ def create_sortable_analysis_table(df_analysis):
 # Interface principal
 st.title("💧 Dashboard de Balanço Hídrico")
 
-# SEÇÃO DE UPLOAD DE ARQUIVOS
-st.header("📁 Carregamento de Dados")
-
-col_upload1, col_upload2 = st.columns(2)
-
-with col_upload1:
-    uploaded_file = st.file_uploader(
-        "📊 **Arquivo Principal de Balanço Hídrico**",
-        type=['xlsx', 'xls'],
-        help="Arquivo Excel com dados do balanço hídrico"
-    )
-
-with col_upload2:
-    uploaded_sigis = st.file_uploader(
-        "📈 **Arquivo SIGIS (Opcional)**",
-        type=['xlsx', 'xls'],
-        help="Arquivo Excel com dados do SIGIS para cálculos de IPL e IVI"
-    )
-
-# Carregar dados
-df, df_sigis = load_data(uploaded_file, uploaded_sigis)
-
-if df is None:
-    st.stop()
-
-# SIDEBAR COM FILTROS
 with st.sidebar:
+    st.markdown("#### 📁 Carregamento de Dados")
+    if 'file_loaded' not in st.session_state:
+        st.session_state.file_loaded = False
+    
+    # Só mostrar carregamento se não há arquivo carregado
+    if not st.session_state.file_loaded:        
+        uploaded_file = st.file_uploader(
+            "📊 **Arquivo Excel**",
+            type=['xlsx', 'xls'],
+            help="Arquivo Excel com duas planilhas:\n- Planilha 1: Dados do Balanço Hídrico\n- Planilha 2: Dados do SIGIS"
+        )
+        
+        if uploaded_file is None:
+            st.info("💡 **Nenhum arquivo carregado**\n\nFaça upload do seu arquivo Excel para começar a análise.")
+            st.stop()  # Para a execução aqui se não há arquivo
+        
+        # Carregar dados
+        df, df_sigis = load_data(uploaded_file)
+        
+        if df is None:
+            st.error("❌ **Erro ao processar o arquivo**\n\nVerifique se o arquivo está no formato correto.")
+            st.stop()
+        
+        # Marcar como carregado e salvar no session_state
+        st.session_state.file_loaded = True
+        st.session_state.df = df
+        st.session_state.df_sigis = df_sigis
+        st.session_state.uploaded_file = uploaded_file
+        st.rerun()  # Recarregar a página para esconder o carregamento
+    
+    else:
+        # Arquivo já carregado - recuperar do session_state
+        df = st.session_state.df
+        df_sigis = st.session_state.df_sigis
+        
+        # Mostrar apenas um pequeno indicador de que há arquivo carregado
+        with st.expander("📊 Arquivo Carregado", expanded=False):
+            st.success("✅ Arquivo Excel carregado com sucesso!")
+            if st.button("Carregar Novo Arquivo"):
+                # Limpar session_state para permitir novo carregamento
+                st.session_state.file_loaded = False
+                if 'df' in st.session_state:
+                    del st.session_state.df
+                if 'df_sigis' in st.session_state:
+                    del st.session_state.df_sigis
+                if 'uploaded_file' in st.session_state:
+                    del st.session_state.uploaded_file
+                st.rerun()
+    
     st.header("🔍 Filtros")
     
     # Regional
@@ -1196,12 +1213,23 @@ with st.sidebar:
         data_range = (data_range_indices, data_range_indices)
     else:
         data_range = data_range_indices
-    
-    # Informações sobre dados de exemplo
-    if uploaded_file is None:
-        st.markdown("---")
-        st.markdown("### 📋 Dados de Exemplo")
-        st.info("Você está visualizando dados fictícios para demonstração. Faça upload do seu arquivo Excel para analisar dados reais.")
+
+# ==========================================
+# DEFINIR VARIÁVEIS GLOBAIS APÓS SIDEBAR
+# ==========================================
+
+# Garantir que data_range está disponível globalmente
+if isinstance(st.session_state.sidebar_periodo, int):
+    data_range = (st.session_state.sidebar_periodo, st.session_state.sidebar_periodo)
+else:
+    data_range = st.session_state.sidebar_periodo
+
+# Garantir que outras variáveis estão disponíveis globalmente
+regional_selecionada = st.session_state.sidebar_regional
+municipio_selecionado = st.session_state.sidebar_municipio
+localidade_selecionada = st.session_state.sidebar_localidade
+        
+st.markdown("---")
 
 # Aplicar filtros
 df_data_filtered = df[(df['ano_mes'] >= data_range[0]) & (df['ano_mes'] <= data_range[1])]
@@ -1272,14 +1300,18 @@ if categoria_perdas != 'N/A':
     
     with col_ind4:
         ivi_formatado = f"{ivi_calculado:.2f}".replace(".", ",") if isinstance(ivi_calculado, (int, float)) and not pd.isna(ivi_calculado) and ivi_calculado > 0 else "N/A"
+        
+        # Definir cor da fonte baseada na categoria
+        cor_fonte = "black" if categoria_perdas == "B" else "white"
+        
         st.markdown(f"""
         <div style='display: flex; align-items: stretch; height: 80px;'>
             <div style='background: linear-gradient(135deg, {cores_categoria[categoria_perdas]}, {cores_categoria[categoria_perdas]}dd); 
-                        color: white; padding: 15px 25px; border-radius: 12px; text-align: center; 
+                        color: {cor_fonte}; padding: 15px 25px; border-radius: 12px; text-align: center; 
                         display: flex; flex-direction: column; justify-content: center; min-width: 250px; margin-right: 15px;
                         box-shadow: 0 4px 15px rgba(0,0,0,0.1);'>
-                <h1 style='margin: 0; font-size: 1.8em; font-weight: bold; color: white; line-height: 0.5;'>Categoria {categoria_perdas}</h1>
-                <div style='margin-top: 2px; font-size: 0.85em; opacity: 0.9; color: white; display: flex; justify-content: space-between;'>
+                <h1 style='margin: 0; font-size: 1.8em; font-weight: bold; color: {cor_fonte}; line-height: 0.5;'>Categoria {categoria_perdas}</h1>
+                <div style='margin-top: 2px; font-size: 0.85em; opacity: 0.9; color: {cor_fonte}; display: flex; justify-content: space-between;'>
                     <span>IVI: {ivi_formatado}</span>
                     <span>Pressão: 30m</span>
                 </div>
@@ -1300,10 +1332,14 @@ st.markdown("---")
 # Recomendações
 if categoria_perdas != 'N/A':
     recomendacoes = matriz_dados['recomendacoes'][categoria_perdas]
+
+    # Definir cor da fonte baseada na categoria
+    cor_fonte_titulo = "black" if categoria_perdas == "B" else cores_categoria[categoria_perdas]
+
     st.markdown(f"""
     <div style='background: linear-gradient(90deg, {cores_categoria[categoria_perdas]}22, {cores_categoria[categoria_perdas]}11); 
                 padding: 1px 0px 0px 10px; border-radius: 10px; border-left: 4px solid {cores_categoria[categoria_perdas]};'>
-        <h4 style='color: {cores_categoria[categoria_perdas]}; margin-top: 5px; margin-bottom: 10px'>
+        <h4 style='color: {cor_fonte_titulo}; margin-top: 5px; margin-bottom: 10px'>
             Ações Recomendadas para Categoria {categoria_perdas}
         </h4>
     </div>
@@ -1591,7 +1627,7 @@ with st.expander("🔧 Análise de Hidrômetros e Submedição", expanded=False)
             economia_potencial = vol_sub_5_anos * 0.7  # Assumindo 70% de redução na submedição
             st.metric("Economia Potencial", f"{format_number_br(economia_potencial)} m³")
 
-        # Criar escala de cores compatível com a paleta do sunburst
+                # Criar escala de cores compatível com a paleta do sunburst
         cores_personalizadas_grafico = [
             'rgba(16, 72, 97, 1)',      # Ano 0 - Azul escuro (similar ao Consumo Autorizado)
             'rgba(70, 130, 180, 1)',    # Ano 1 - Azul médio (similar ao Autorizado não Faturado)
@@ -2009,7 +2045,7 @@ if df_sigis is not None and len(df['ano_mes'].unique()) > 1:
                 return meses_futuros
             
             meses_futuros_6m = gerar_meses_futuros(ultimo_mes, 6)
-            
+
             # Gráfico IPL
             st.markdown("<h4 style='margin-bottom: -10px;'>Evolução do IPL (Índice de Perdas por Ligação)</h4>", unsafe_allow_html=True)
             
